@@ -159,15 +159,27 @@ def argos_offline_translate(text: str, source: str, target: str) -> str:
 
 
 def argos_install(source: str, target: str) -> None:
-    import argostranslate.package
+    import socket
+    from pathlib import Path
 
+    import argostranslate.package
+    import argostranslate.settings
+
+    previous = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(15)
     try:
-        argostranslate.package.update_package_index()
-        available = argostranslate.package.get_available_packages()
-    except DownloadError:
-        raise
-    except Exception as exc:
-        raise DownloadError(str(exc)) from exc
+        try:
+            argostranslate.package.update_package_index()
+            index = argostranslate.settings.local_package_index
+            if not Path(index).is_file():
+                raise DownloadError("package index unavailable")
+            available = argostranslate.package.get_available_packages()
+        except DownloadError:
+            raise
+        except Exception as exc:
+            raise DownloadError(str(exc)) from exc
+    finally:
+        socket.setdefaulttimeout(previous)
     install_directions(
         source,
         target,

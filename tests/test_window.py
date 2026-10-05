@@ -108,6 +108,22 @@ def test_edit_clears_swap_override():
     assert online.calls[-1] == ("de", "tr")
 
 
+def test_begin_swap_records_no_online_call():
+    online = Online("x")
+    popup = controller(FixedDetect("de", 0.9), online)
+    generation = popup.open_with()
+    popup.translate_now("hallo", generation)
+    assert online.calls == [("de", "tr")]
+    started = popup.begin_swap()
+    assert started == generation + 1
+    assert popup.generation == started
+    assert online.calls == [("de", "tr")]
+    result = popup.translate_now("hallo", started)
+    assert result is not None
+    assert result.direction_line == "Turkish → German"
+    assert online.calls == [("de", "tr"), ("tr", "de")]
+
+
 def test_swap_is_off_for_auto():
     popup = controller(FixedDetect("en", 0.1), Online("x"))
     generation = popup.open_with()

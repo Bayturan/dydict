@@ -43,20 +43,36 @@ def apply_shell(window, floating: bool) -> bool:
     return True
 
 
-def _monitor(window):
+def _pointer_monitor(window):
     display = window.get_display()
     seat = display.get_default_seat()
     device = seat.get_pointer() if seat is not None else None
-    monitor = None
-    if device is not None:
-        surface, _x, _y = device.get_surface_at_position()
-        if surface is not None:
-            monitor = display.get_monitor_at_surface(surface)
-    if monitor is None:
-        monitors = display.get_monitors()
-        if monitors.get_n_items():
-            monitor = monitors.get_item(0)
-    return monitor
+    if device is None:
+        return None
+    surface, _x, _y = device.get_surface_at_position()
+    if surface is None:
+        return None
+    return display.get_monitor_at_surface(surface)
+
+
+def _window_monitor(window):
+    display = window.get_display()
+    native = window.get_native()
+    surface = native.get_surface() if native is not None else None
+    if surface is None:
+        return None
+    return display.get_monitor_at_surface(surface)
+
+
+def _monitor(window):
+    # Plain X11 only. The overlay path must not invent monitor 0.
+    monitor = _pointer_monitor(window)
+    if monitor is not None:
+        return monitor
+    monitors = window.get_display().get_monitors()
+    if monitors.get_n_items():
+        return monitors.get_item(0)
+    return None
 
 
 def _measured_height(window, height: int | None = None) -> int:
@@ -70,18 +86,26 @@ def _measured_height(window, height: int | None = None) -> int:
     return value if value > 0 else 0
 
 
-def _center_on_output(window, layer, height: int | None = None) -> None:
+def _overlay_margins(window, layer, monitor, height: int | None) -> None:
     # Margins are relative to the chosen monitor. geom.x is only for the X11 path.
-    monitor = _monitor(window)
-    if monitor is None:
-        return
-    layer.set_monitor(window, monitor)
     measured = _measured_height(window, height)
     if measured <= 0:
         return
     geom = monitor.get_geometry()
     layer.set_margin(window, layer.Edge.LEFT, max(0, (geom.width - WINDOW_WIDTH) // 2))
     layer.set_margin(window, layer.Edge.TOP, max(0, (geom.height - measured) // 2))
+
+
+def _center_on_output(window, layer, height: int | None = None) -> None:
+    pointer = _pointer_monitor(window)
+    if pointer is not None:
+        layer.set_monitor(window, pointer)
+        _overlay_margins(window, layer, pointer, height)
+        return
+    monitor = _window_monitor(window)
+    if monitor is None:
+        return
+    _overlay_margins(window, layer, monitor, height)
 
 
 def center_plain_x11(window, height: int | None = None) -> None:

@@ -101,7 +101,7 @@ class PopupController:
         self._result = result
         return result
 
-    def swap(self, text: str) -> QueryResult | None:
+    def begin_swap(self) -> int | None:
         if self._direction is None:
             return None
         swapped = swap_direction(self._direction)
@@ -109,7 +109,13 @@ class PopupController:
             return None
         self._override = swapped
         self._generation += 1
-        return self.translate_now(text, self._generation)
+        return self._generation
+
+    def swap(self, text: str) -> QueryResult | None:
+        generation = self.begin_swap()
+        if generation is None:
+            return None
+        return self.translate_now(text, generation)
 
     def enter_action(self, copy) -> str:
         return self._copy(copy, hide_token="copied_hide")
@@ -309,6 +315,7 @@ class Popup:
         self.result.set_text("")
         self.message.set_text("")
         self.download.set_visible(False)
+        self.swap_button.set_sensitive(False)
 
     def _focus_in_settings(self) -> bool:
         widget = self.window.get_focus()
@@ -344,9 +351,11 @@ class Popup:
         self.window.set_visible(False)
 
     def _swap_clicked(self) -> None:
-        swapped = self.controller.swap(self._current_text())
-        if swapped is not None:
-            self._apply(swapped)
+        generation = self.controller.begin_swap()
+        if generation is None:
+            return
+        self._clear_query_view()
+        self._start(self._current_text(), generation)
 
     def _on_close(self, _window) -> bool:
         self._hide()
@@ -379,11 +388,21 @@ class Popup:
         import threading
 
         def work():
-            result = self.controller.translate_now(text, generation)
+            try:
+                result = self.controller.translate_now(text, generation)
+            except Exception as exc:
+                self._GLib.idle_add(self._worker_failed, str(exc), generation)
+                return
             if result is not None:
                 self._GLib.idle_add(self._apply, result, generation)
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _worker_failed(self, message: str, generation: int) -> bool:
+        if generation != self.controller.generation:
+            return False
+        self.message.set_text(message)
+        return False
 
     def _apply(self, result, generation=None) -> bool:
         if generation is not None and generation != self.controller.generation:
@@ -400,6 +419,8 @@ class Popup:
             left = language_name(result.package_source, self.controller._names)
             right = language_name(result.package_target, self.controller._names)
             self.download.set_label(f"Download {left} and {right}")
+        direction = self.controller.direction
+        self.swap_button.set_sensitive(direction is not None and direction.source != "auto")
         self._shown_generation = self.controller.generation
         return False
 
@@ -440,9 +461,7 @@ class Popup:
             self._hide()
             return True
         if keyval == self._Gdk.KEY_s and state & self._Gdk.ModifierType.CONTROL_MASK:
-            swapped = self.controller.swap(self._current_text())
-            if swapped is not None:
-                self._apply(swapped)
+            self._swap_clicked()
             return True
         return False
 
@@ -473,6 +492,7 @@ class Popup:
             return False
         text = self._current_text()
         generation = self.controller.retry()
+        self._clear_query_view()
         self._start(text, generation)
         return False
 
@@ -481,6 +501,7 @@ class Popup:
         self.controller.replace_config(config)
         text = self._current_text()
         generation = self.controller.edit(text)
+        self._clear_query_view()
         self._start(text, generation)
 
 

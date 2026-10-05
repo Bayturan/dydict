@@ -54,6 +54,7 @@ class InstanceServer:
             except OSError:
                 break
             try:
+                conn.settimeout(0.5)
                 data = b""
                 while b"\n" not in data:
                     chunk = conn.recv(64)
@@ -64,6 +65,8 @@ class InstanceServer:
                         break
                 if data.startswith(b"toggle"):
                     self.on_toggle()
+            except TimeoutError:
+                pass
             finally:
                 conn.close()
 
@@ -165,8 +168,8 @@ def main(argv: list[str] | None = None) -> int:
         return state["config"]
 
     def on_save(config):
-        state["config"] = config
         save_config(config, cfg_path)
+        state["config"] = config
 
     controller = PopupController(
         state["config"],

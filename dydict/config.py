@@ -133,5 +133,13 @@ def save_config(config: Config, path: Path) -> None:
         "online_api_key": config.online_api_key,
         "timeout_ms": config.timeout_ms,
     }
-    path.write_text(tomli_w.dumps(payload), encoding="utf-8")
+    data = tomli_w.dumps(payload).encode("utf-8")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        remaining = data
+        while remaining:
+            written = os.write(fd, remaining)
+            remaining = remaining[written:]
+    finally:
+        os.close(fd)
     path.chmod(0o600)

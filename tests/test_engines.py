@@ -184,6 +184,35 @@ def test_download_failure_is_not_retried():
     assert len(calls) == 1
 
 
+def test_missing_index_after_refresh_is_download_error(monkeypatch, tmp_path):
+    import socket
+
+    index = tmp_path / "missing" / "index.json"
+    seen = {}
+    listed = []
+
+    def update_package_index():
+        seen["timeout"] = socket.getdefaulttimeout()
+
+    def get_available_packages():
+        listed.append("called")
+        raise AssertionError("must not list packages")
+
+    monkeypatch.setattr("argostranslate.package.update_package_index", update_package_index)
+    monkeypatch.setattr("argostranslate.package.get_available_packages", get_available_packages)
+    monkeypatch.setattr("argostranslate.settings.local_package_index", index)
+    previous = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(4.5)
+    try:
+        with pytest.raises(DownloadError):
+            argos_install("de", "tr")
+        assert seen["timeout"] == 15
+        assert listed == []
+        assert socket.getdefaulttimeout() == 4.5
+    finally:
+        socket.setdefaulttimeout(previous)
+
+
 def test_index_update_failure_is_download_error(monkeypatch):
     installed = []
 

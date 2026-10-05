@@ -1,9 +1,11 @@
+import socket
 import threading
+import time
 from pathlib import Path
 
 import pytest
 
-from dydict.app import InstanceError, claim_or_toggle, send_toggle, socket_path
+from dydict.app import InstanceError, InstanceServer, claim_or_toggle, send_toggle, socket_path
 
 
 def test_socket_path_uses_runtime_dir_or_cache():
@@ -37,6 +39,25 @@ def test_stale_socket_file_is_replaced(tmp_path: Path):
         assert send_toggle(path) is True
         assert fired.wait(1)
     finally:
+        server.close()
+
+
+def test_silent_client_does_not_block_the_next_toggle(tmp_path: Path):
+    path = tmp_path / "dydict.sock"
+    fired = threading.Event()
+    server = InstanceServer(path, fired.set)
+    server.bind()
+    server.start()
+    silent = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        silent.connect(str(path))
+        time.sleep(0.15)
+        started = time.monotonic()
+        assert send_toggle(path) is True
+        assert fired.wait(1.5)
+        assert time.monotonic() - started < 1.5
+    finally:
+        silent.close()
         server.close()
 
 
