@@ -1,0 +1,26 @@
+[project]
+name = "dydict"
+version = "0.1.0"
+description = "Launcher-style translation popup"
+requires-python = ">=3.11"
+dependencies = [
+  "lingua-language-detector",
+  "argostranslate",
+  "tomli-w",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+dydict = "dydict.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["dydict*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

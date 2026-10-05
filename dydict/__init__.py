@@ -1,0 +1,1 @@
+"""DyDict translation popup."""
