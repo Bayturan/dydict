@@ -115,6 +115,10 @@ def claim_or_toggle(path: Path, on_toggle: Callable[[], None]) -> InstanceServer
     return server
 
 
+def language_code(language) -> str:
+    return language.iso_code_639_1.name.lower()
+
+
 def main(argv: list[str] | None = None) -> int:
     import sys
 
@@ -152,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
             if not values:
                 return None, 0.0
             best = values[0]
-            return best.language.iso_code_639_1.value, best.value
+            return language_code(best.language), best.value
 
     cfg_path = config_path()
     state = {"config": load_config(cfg_path)}

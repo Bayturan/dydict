@@ -169,7 +169,9 @@ class PopupController:
 
 DEBOUNCE_MS = 300
 WINDOW_WIDTH = 640
+QUERY_MAX_HEIGHT = 52
 RESULT_MAX_HEIGHT = 300
+WINDOW_MAX_HEIGHT = 480
 
 
 class OnlineEngine:
@@ -212,6 +214,7 @@ class Popup:
         self._gate = FieldGate()
         self._debounce_id = None
         self._accept_leave = False
+        self._shown_generation = None
 
         self.window = Gtk.Window(title="DyDict")
         self.window.set_default_size(WINDOW_WIDTH, -1)
@@ -224,7 +227,12 @@ class Popup:
 
         self.buffer = Gtk.TextBuffer()
         self.view = Gtk.TextView(buffer=self.buffer, wrap_mode=Gtk.WrapMode.WORD_CHAR)
-        self.view.set_size_request(WINDOW_WIDTH - 24, 52)
+        self.view.set_size_request(WINDOW_WIDTH - 24, QUERY_MAX_HEIGHT)
+        query_scroll = Gtk.ScrolledWindow()
+        query_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        query_scroll.set_propagate_natural_height(True)
+        query_scroll.set_max_content_height(QUERY_MAX_HEIGHT)
+        query_scroll.set_child(self.view)
         self.direction = Gtk.Label(label="", xalign=0)
         self.engine = Gtk.Label(label="", xalign=1)
         head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -252,17 +260,23 @@ class Popup:
         actions.append(self.download)
         actions.append(self.settings_button)
 
-        root.append(self.view)
+        root.append(query_scroll)
         root.append(head)
         root.append(self.message)
         root.append(scroller)
         root.append(actions)
         root.append(self.settings)
-        self.window.set_child(root)
+        outer = Gtk.ScrolledWindow()
+        outer.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        outer.set_propagate_natural_height(True)
+        outer.set_max_content_height(WINDOW_MAX_HEIGHT)
+        outer.set_child(root)
+        self.window.set_child(outer)
 
         keys = Gtk.EventControllerKey()
+        keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         keys.connect("key-pressed", self._on_key)
-        self.view.add_controller(keys)
+        self.window.add_controller(keys)
         self.buffer.connect("changed", self._on_changed)
         self.swap_button.connect("clicked", lambda _b: self._swap_clicked())
         self.copy_button.connect("clicked", lambda _b: self._copy_clicked())
@@ -281,11 +295,28 @@ class Popup:
 
         prepared, _shortened = prepare_query(raw)
         generation = self.controller.open_with()
+        self._clear_query_view()
         self.window.set_visible(True)
         self._set_text(prepared)
         self.view.grab_focus()
         self._GLib.idle_add(self._arm_leave)
         self._start(prepared, generation)
+
+    def _clear_query_view(self) -> None:
+        self._shown_generation = None
+        self.direction.set_text("")
+        self.engine.set_text("")
+        self.result.set_text("")
+        self.message.set_text("")
+        self.download.set_visible(False)
+
+    def _focus_in_settings(self) -> bool:
+        widget = self.window.get_focus()
+        while widget is not None:
+            if widget == self.settings:
+                return True
+            widget = widget.get_parent()
+        return False
 
     def _arm_leave(self) -> bool:
         self._accept_leave = True
@@ -334,6 +365,7 @@ class Popup:
             return
         text = self.buffer.get_text(*self.buffer.get_bounds(), False)
         generation = self.controller.edit(text)
+        self._clear_query_view()
         if self._debounce_id is not None:
             self._GLib.source_remove(self._debounce_id)
         self._debounce_id = self._GLib.timeout_add(DEBOUNCE_MS, self._fire, text, generation)
@@ -349,11 +381,13 @@ class Popup:
         def work():
             result = self.controller.translate_now(text, generation)
             if result is not None:
-                self._GLib.idle_add(self._apply, result)
+                self._GLib.idle_add(self._apply, result, generation)
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _apply(self, result) -> bool:
+    def _apply(self, result, generation=None) -> bool:
+        if generation is not None and generation != self.controller.generation:
+            return False
         self.direction.set_text(result.direction_line)
         self.engine.set_text(result.engine or "")
         self.result.set_text(result.translation)
@@ -366,12 +400,15 @@ class Popup:
             left = language_name(result.package_source, self.controller._names)
             right = language_name(result.package_target, self.controller._names)
             self.download.set_label(f"Download {left} and {right}")
+        self._shown_generation = self.controller.generation
         return False
 
     def _current_text(self) -> str:
         return self.buffer.get_text(*self.buffer.get_bounds(), False)
 
     def _copy_clicked(self) -> None:
+        if self._shown_generation != self.controller.generation:
+            return
         self._dispatch(self.controller.copy_action(self._clipboard))
 
     def _clipboard(self, text: str) -> None:
@@ -394,7 +431,10 @@ class Popup:
         if enter and state & self._Gdk.ModifierType.SHIFT_MASK:
             return False
         if enter:
-            self._dispatch(self.controller.enter_action(self._clipboard))
+            if self._focus_in_settings():
+                return False
+            if self._shown_generation == self.controller.generation:
+                self._dispatch(self.controller.enter_action(self._clipboard))
             return True
         if keyval == self._Gdk.KEY_Escape:
             self._hide()

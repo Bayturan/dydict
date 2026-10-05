@@ -45,3 +45,19 @@ def test_unlink_failure_raises(tmp_path: Path):
     path.mkdir()
     with pytest.raises(InstanceError, match="could not be opened"):
         claim_or_toggle(path, lambda: None)
+
+
+def test_language_code_reads_the_iso_name():
+    from lingua import Language
+
+    from dydict.app import language_code
+
+    class Code:
+        name = "TR"
+
+    class FakeLanguage:
+        iso_code_639_1 = Code()
+
+    assert language_code(FakeLanguage()) == "tr"
+    assert language_code(Language.ENGLISH) == "en"
+    assert language_code(Language.BOKMAL) == "nb"
