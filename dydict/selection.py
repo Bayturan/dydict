@@ -78,14 +78,30 @@ def copy_text(text: str, env: Mapping[str, str], run, which: Callable[[str], str
 
 def subprocess_run(argv: list[str], timeout: float, stdin: str | None) -> CommandResult:
     try:
-        completed = subprocess.run(
-            argv,
-            input=stdin,
-            text=True,
-            capture_output=True,
-            timeout=timeout,
-            check=False,
-        )
+        if stdin is None:
+            completed = subprocess.run(
+                argv,
+                input=None,
+                text=True,
+                capture_output=True,
+                timeout=timeout,
+                check=False,
+            )
+            stdout = completed.stdout
+        else:
+            # wl-copy, xclip, and xsel fork a resident process that inherits
+            # stdout and stderr. Open pipes from capture_output never close,
+            # so the parent waits until the copy timeout.
+            completed = subprocess.run(
+                argv,
+                input=stdin,
+                text=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=timeout,
+                check=False,
+            )
+            stdout = ""
     except subprocess.TimeoutExpired as exc:
         raise TimeoutError(argv[0]) from exc
-    return CommandResult(completed.returncode, completed.stdout)
+    return CommandResult(completed.returncode, stdout)

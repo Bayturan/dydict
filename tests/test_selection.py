@@ -1,3 +1,5 @@
+import subprocess
+
 import pytest
 
 from dydict.selection import (
@@ -9,6 +11,7 @@ from dydict.selection import (
     copy_text,
     prepare_query,
     read_primary,
+    subprocess_run,
 )
 
 
@@ -83,3 +86,21 @@ def test_copy_sends_translation_on_stdin():
 def test_copy_without_a_tool_raises():
     with pytest.raises(CopyError):
         copy_text("x", {}, lambda *args: CommandResult(0, ""), which_factory(set()))
+
+
+def test_write_does_not_capture_stdio(monkeypatch):
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen["kwargs"] = kwargs
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr("dydict.selection.subprocess.run", fake_run)
+    result = subprocess_run(["wl-copy"], COPY_TIMEOUT_SEC, "merhaba")
+    kwargs = seen["kwargs"]
+    assert kwargs.get("capture_output") is not True
+    assert kwargs["stdout"] is subprocess.DEVNULL
+    assert kwargs["stderr"] is subprocess.DEVNULL
+    assert kwargs["stdout"] is not subprocess.PIPE
+    assert kwargs["stderr"] is not subprocess.PIPE
+    assert result == CommandResult(0, "")
