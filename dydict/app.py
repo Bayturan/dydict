@@ -113,3 +113,87 @@ def claim_or_toggle(path: Path, on_toggle: Callable[[], None]) -> InstanceServer
             return None
         raise InstanceError(SOCKET_MESSAGE)
     return server
+
+
+def main(argv: list[str] | None = None) -> int:
+    import sys
+
+    args = list(sys.argv[1:] if argv is None else argv)
+    floating = "--floating" in args
+    path = socket_path()
+    holder = {"toggle": lambda: None}
+    try:
+        server = claim_or_toggle(path, lambda: holder["toggle"]())
+    except InstanceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if server is None:
+        return 0
+
+    import gi
+
+    gi.require_version("Gtk", "4.0")
+    from gi.repository import GLib, Gtk
+
+    GLib.set_prgname("dydict")
+    from dydict.config import LANGUAGES, config_path, load_config, save_config
+    from dydict.window import OfflineEngine, OnlineEngine, PopupController, build_popup
+
+    class LinguaDetect:
+        def __init__(self) -> None:
+            from lingua import Language, LanguageDetectorBuilder
+            from dydict.detect import LINGUA_ENUM_NAMES
+
+            languages = [getattr(Language, name) for name in LINGUA_ENUM_NAMES.values()]
+            self._detector = LanguageDetectorBuilder.from_languages(*languages).build()
+
+        def detect(self, text: str):
+            values = self._detector.compute_language_confidence_values(text)
+            if not values:
+                return None, 0.0
+            best = values[0]
+            return best.language.iso_code_639_1.value, best.value
+
+    cfg_path = config_path()
+    state = {"config": load_config(cfg_path)}
+
+    def current_config():
+        return state["config"]
+
+    def on_save(config):
+        state["config"] = config
+        save_config(config, cfg_path)
+
+    controller = PopupController(
+        state["config"],
+        LinguaDetect(),
+        OnlineEngine(current_config),
+        OfflineEngine(),
+        LANGUAGES,
+    )
+    popup = build_popup(controller, on_save)
+
+    import os
+    import shutil
+
+    from dydict.selection import read_primary, subprocess_run
+    from dydict.shell import apply_shell, center_plain_x11
+
+    overlay = apply_shell(popup.window, floating)
+    raw = read_primary(os.environ, subprocess_run, shutil.which)
+    popup.show_text(raw)
+    if not overlay:
+        center_plain_x11(popup.window)
+
+    def toggle():
+        GLib.idle_add(popup.toggle)
+
+    holder["toggle"] = toggle
+    server.start()
+    loop = GLib.MainLoop()
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, __import__("signal").SIGINT, loop.quit)
+    try:
+        loop.run()
+    finally:
+        server.close()
+    return 0
