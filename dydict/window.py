@@ -178,6 +178,14 @@ WINDOW_WIDTH = 640
 QUERY_MAX_HEIGHT = 52
 RESULT_MAX_HEIGHT = 300
 WINDOW_MAX_HEIGHT = 480
+# The settings form sits under the translation. 480px clips Save, and this
+# scrolled window compresses its child instead of scrolling, so open settings
+# raise the cap enough for the form to stay on screen.
+SETTINGS_WINDOW_MAX = 720
+
+
+def window_content_limit(settings_open: bool) -> int:
+    return SETTINGS_WINDOW_MAX if settings_open else WINDOW_MAX_HEIGHT
 
 
 class OnlineEngine:
@@ -274,10 +282,12 @@ class Popup:
         root.append(self.settings)
         outer = Gtk.ScrolledWindow()
         outer.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        outer.set_overlay_scrolling(False)
         outer.set_propagate_natural_height(True)
         outer.set_max_content_height(WINDOW_MAX_HEIGHT)
         outer.set_child(root)
         self.window.set_child(outer)
+        self._outer = outer
 
         keys = Gtk.EventControllerKey()
         keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
@@ -287,14 +297,17 @@ class Popup:
         self.swap_button.connect("clicked", lambda _b: self._swap_clicked())
         self.copy_button.connect("clicked", lambda _b: self._copy_clicked())
         self.download.connect("clicked", lambda _b: self._download_clicked())
-        self.settings_button.connect("clicked", lambda _b: self.settings.set_visible(
-            not self.settings.get_visible()
-        ))
+        self.settings_button.connect("clicked", lambda _b: self._toggle_settings())
         focus = Gtk.EventControllerFocus()
         focus.connect("leave", self._on_leave)
         self.window.add_controller(focus)
         self.window.connect("close-request", self._on_close)
         self._Gdk = Gdk
+
+    def _toggle_settings(self) -> None:
+        show = not self.settings.get_visible()
+        self.settings.set_visible(show)
+        self._outer.set_max_content_height(window_content_limit(show))
 
     def show_text(self, raw: str) -> None:
         from dydict.selection import prepare_query

@@ -65,4 +65,4 @@ Enter copies the translation and hides the window. Esc hides it and leaves the c
     online_api_key = ""
     timeout_ms = 2500
 
-The public server may require an API key. Point `online_url` at any LibreTranslate-compatible server.
+The public server may require an API key. Point `online_url` at any LibreTranslate-compatible server. A DeepL address (`https://api-free.deepl.com` or `https://api.deepl.com`, including a full `/v2/translate` path) uses the DeepL API with the same key field.

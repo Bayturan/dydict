@@ -3,7 +3,7 @@ import pytest
 from dydict.config import LANGUAGES, Config
 from dydict.engines import EngineFailure, EngineSuccess, OnlineError, PackageMissing
 from dydict.selection import CopyError
-from dydict.window import COPY_FAILED, FieldGate, PopupController
+from dydict.window import COPY_FAILED, FieldGate, PopupController, window_content_limit
 
 
 class FixedDetect:
@@ -26,6 +26,11 @@ class Online:
         if self.error:
             raise self.error
         return self.text
+
+
+def test_settings_panel_can_grow_past_the_compact_popup():
+    assert window_content_limit(False) == 480
+    assert window_content_limit(True) >= 640
 
 
 def controller(detect, online, offline=None, config=None):

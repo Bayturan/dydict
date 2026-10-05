@@ -2,11 +2,44 @@
 
 from __future__ import annotations
 
+import os
+
 WINDOW_WIDTH = 640
 
 
 def use_overlay(floating: bool, typelib_ok: bool, protocol_ok: bool) -> bool:
     return (not floating) and typelib_ok and protocol_ok
+
+
+def layer_shell_preload(current: str, library: str | None) -> str | None:
+    """Put gtk4-layer-shell at the front of LD_PRELOAD.
+
+    The library's Wayland shim only installs when it is loaded before
+    libwayland. Python loads GTK first, so is_supported() stays false and
+    the popup falls back to a plain window unless the process is re-executed
+    with this preload.
+    """
+    if not library:
+        return None
+    parts = [part for part in current.replace(" ", ":").split(":") if part]
+    if any(os.path.basename(part).startswith("libgtk4-layer-shell") for part in parts):
+        return None
+    return ":".join([library, *parts])
+
+
+def layer_shell_library() -> str | None:
+    import ctypes.util
+
+    name = ctypes.util.find_library("gtk4-layer-shell")
+    if not name:
+        return None
+    if os.path.isabs(name):
+        return name if os.path.exists(name) else None
+    for directory in ("/usr/lib", "/usr/lib64", "/usr/local/lib", "/lib"):
+        path = os.path.join(directory, name)
+        if os.path.exists(path):
+            return path
+    return name
 
 
 def load_layer_shell():

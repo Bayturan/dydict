@@ -15,6 +15,7 @@ from dydict.engines import (
     install_directions,
     is_current,
     online_translate,
+    parse_deepl_response,
     parse_online_response,
     translate_endpoint,
     translate_with_fallback,
@@ -142,6 +143,98 @@ def test_bad_scheme_does_not_post():
 
     with pytest.raises(OnlineError):
         online_translate("ftp://example.com", "hi", "en", "tr", "", 2500, post)
+
+
+def test_doubled_deepl_url_posts_to_the_free_api():
+    seen = {}
+
+    def post(url, data, headers, timeout):
+        seen["url"] = url
+        seen["body"] = json.loads(data)
+        seen["authorization"] = headers.get("Authorization")
+        seen["timeout"] = timeout
+        return 200, b'{"translations":[{"text":"merhaba","detected_source_language":"EN"}]}'
+
+    text = online_translate(
+        "https://https://api-free.deepl.com/v2/translate",
+        "hello",
+        "en",
+        "tr",
+        "secret",
+        2500,
+        post,
+    )
+    assert text == "merhaba"
+    assert seen["url"] == "https://api-free.deepl.com/v2/translate"
+    assert seen["body"] == {"text": ["hello"], "source_lang": "EN", "target_lang": "TR"}
+    assert seen["authorization"] == "DeepL-Auth-Key secret"
+    assert seen["timeout"] == 2.5
+
+
+def test_deepl_auto_omits_source_and_uses_english_variant():
+    seen = {}
+
+    def post(url, data, headers, timeout):
+        seen["url"] = url
+        seen["body"] = json.loads(data)
+        seen["authorization"] = headers.get("Authorization")
+        return 200, b'{"translations":[{"text":"hello"}]}'
+
+    text = online_translate(
+        "https://api.deepl.com",
+        "merhaba",
+        "auto",
+        "en",
+        "",
+        2500,
+        post,
+    )
+    assert text == "hello"
+    assert seen["url"] == "https://api.deepl.com/v2/translate"
+    assert seen["body"] == {"text": ["merhaba"], "target_lang": "EN-US"}
+    assert seen["authorization"] is None
+
+
+def test_deepl_regional_codes_are_target_only():
+    bodies = []
+
+    def post(url, data, headers, timeout):
+        bodies.append(json.loads(data))
+        return 200, b'{"translations":[{"text":"ok"}]}'
+
+    online_translate("https://api-free.deepl.com/v2", "oi", "pt", "zh", "k", 1000, post)
+    online_translate("https://api-free.deepl.com/v2/translate/", "hi", "zh", "pt", "k", 1000, post)
+    assert bodies[0] == {"text": ["oi"], "source_lang": "PT", "target_lang": "ZH-HANS"}
+    assert bodies[1] == {"text": ["hi"], "source_lang": "ZH", "target_lang": "PT-BR"}
+
+
+def test_deepl_bad_payload_is_rejected():
+    with pytest.raises(OnlineError):
+        parse_deepl_response(200, b'{"translations":[]}')
+    with pytest.raises(OnlineError):
+        parse_deepl_response(403, b'{"message":"Forbidden"}')
+
+
+def test_repeated_scheme_on_libretranslate_uses_the_real_host():
+    seen = {}
+
+    def post(url, data, headers, timeout):
+        seen["url"] = url
+        seen["body"] = json.loads(data)
+        return 200, b'{"translatedText": "merhaba"}'
+
+    text = online_translate(
+        "https://https://libretranslate.com",
+        "hello",
+        "en",
+        "tr",
+        "",
+        2500,
+        post,
+    )
+    assert text == "merhaba"
+    assert seen["url"] == "https://libretranslate.com/translate"
+    assert seen["body"]["q"] == "hello"
 
 
 def test_german_download_is_both_directions_of_that_pair():

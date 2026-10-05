@@ -1,4 +1,10 @@
-from dydict.shell import WINDOW_WIDTH, _center_on_output, _monitor, use_overlay
+from dydict.shell import (
+    WINDOW_WIDTH,
+    _center_on_output,
+    _monitor,
+    layer_shell_preload,
+    use_overlay,
+)
 
 
 class _Geom:
@@ -101,6 +107,16 @@ def _outputs():
     window = _Monitor("window", 1600, 900, x=800, y=10)
     output0 = _Monitor("zero", 800, 600, x=0, y=0)
     return pointer_surface, window_surface, pointer, window, output0
+
+
+def test_layer_shell_preload_goes_first_and_is_not_repeated():
+    library = "/usr/lib/libgtk4-layer-shell.so"
+    assert layer_shell_preload("", None) is None
+    assert layer_shell_preload("", library) == library
+    assert layer_shell_preload("libfoo.so", library) == f"{library}:libfoo.so"
+    assert layer_shell_preload("libfoo.so libbar.so", library) == f"{library}:libfoo.so:libbar.so"
+    assert layer_shell_preload(library, library) is None
+    assert layer_shell_preload("/usr/lib/libgtk4-layer-shell.so.0:libfoo.so", library) is None
 
 
 def test_overlay_only_when_the_compositor_and_library_agree():
