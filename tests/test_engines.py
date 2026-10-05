@@ -11,6 +11,7 @@ from dydict.engines import (
     PackageMissing,
     build_translate_body,
     directions_to_install,
+    argos_install,
     install_directions,
     is_current,
     online_translate,
@@ -181,3 +182,22 @@ def test_download_failure_is_not_retried():
             "de", "tr", set(LANGUAGES), [Package()], download, lambda path: None
         )
     assert len(calls) == 1
+
+
+def test_index_update_failure_is_download_error(monkeypatch):
+    installed = []
+
+    def update_package_index():
+        raise RuntimeError("index down")
+
+    def install_from_path(path):
+        installed.append(path)
+
+    monkeypatch.setattr(
+        "argostranslate.package.update_package_index", update_package_index
+    )
+    monkeypatch.setattr("argostranslate.package.install_from_path", install_from_path)
+
+    with pytest.raises(DownloadError, match="index down"):
+        argos_install("de", "tr")
+    assert installed == []

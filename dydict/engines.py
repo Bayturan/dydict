@@ -161,8 +161,13 @@ def argos_offline_translate(text: str, source: str, target: str) -> str:
 def argos_install(source: str, target: str) -> None:
     import argostranslate.package
 
-    argostranslate.package.update_package_index()
-    available = argostranslate.package.get_available_packages()
+    try:
+        argostranslate.package.update_package_index()
+        available = argostranslate.package.get_available_packages()
+    except DownloadError:
+        raise
+    except Exception as exc:
+        raise DownloadError(str(exc)) from exc
     install_directions(
         source,
         target,
