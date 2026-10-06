@@ -144,7 +144,8 @@ def main(argv: list[str] | None = None) -> int:
 
     GLib.set_prgname("dydict")
     from dydict.config import LANGUAGES, config_path, load_config, save_config
-    from dydict.window import OfflineEngine, OnlineEngine, PopupController, build_popup
+    from dydict.engines import load_local_engine
+    from dydict.window import OnlineEngine, PopupController, build_popup, present_query
 
     class LinguaDetect:
         def __init__(self) -> None:
@@ -171,11 +172,14 @@ def main(argv: list[str] | None = None) -> int:
         save_config(config, cfg_path)
         state["config"] = config
 
+    def detector_factory():
+        return LinguaDetect()
+
     controller = PopupController(
         state["config"],
-        LinguaDetect(),
+        None,
         OnlineEngine(current_config),
-        OfflineEngine(),
+        load_local_engine(),
         LANGUAGES,
     )
     popup = build_popup(controller, on_save)
@@ -188,7 +192,7 @@ def main(argv: list[str] | None = None) -> int:
 
     overlay = apply_shell(popup.window, floating)
     raw = read_primary(os.environ, subprocess_run, shutil.which)
-    popup.show_text(raw)
+    present_query(popup, raw, controller, detector_factory, popup.start_translation)
     if not overlay:
         center_plain_x11(popup.window)
 

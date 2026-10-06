@@ -1,0 +1,16 @@
+[project]
+name = "dydict-local"
+version = "0.1.0"
+description = "Connect a local translation API to DyDict"
+requires-python = ">=3.11"
+dependencies = ["dydict"]
+
+[project.entry-points."dydict.engines"]
+local = "dydict_local:engine"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["dydict_local*"]

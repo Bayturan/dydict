@@ -154,6 +154,11 @@ def center_plain_x11(window, height: int | None = None) -> None:
     surface = native.get_surface() if native is not None else None
     if not isinstance(surface, GdkX11.X11Surface):
         return
+    # GTK 4.22 dropped gdk_x11_surface_move. Centering is best-effort; a missing
+    # method must not abort startup, or the plain window never reaches the main loop.
+    move = getattr(surface, "move", None)
+    if move is None:
+        return
     monitor = _monitor(window)
     if monitor is None:
         return
@@ -161,7 +166,7 @@ def center_plain_x11(window, height: int | None = None) -> None:
     if measured <= 0:
         return
     geom = monitor.get_geometry()
-    surface.move(
+    move(
         geom.x + max(0, (geom.width - WINDOW_WIDTH) // 2),
         geom.y + max(0, (geom.height - measured) // 2),
     )

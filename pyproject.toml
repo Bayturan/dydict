@@ -5,7 +5,6 @@ description = "Launcher-style translation popup"
 requires-python = ">=3.11"
 dependencies = [
   "lingua-language-detector",
-  "argostranslate",
   "tomli-w",
 ]
 
@@ -21,6 +20,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["dydict*"]
+exclude = ["dydict_local*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

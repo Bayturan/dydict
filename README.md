@@ -2,7 +2,7 @@
 
 DyDict is a translation popup. The command `dydict` opens it. Running the command again hides it.
 
-Selected text is placed in the box. With no selection, the box is empty. Text in the main language is translated into the second language. Any other text is translated into the main language. An online LibreTranslate server is tried first. Argos Translate answers when the network request fails and the language package is installed.
+Selected text is placed in the box. With no selection, the box is empty. Text in the main language is translated into the second language. Any other text is translated into the main language. Translation uses the configured HTTP server. The default install does not include Argos Translate, PyTorch, or CUDA.
 
 ## Install
 
@@ -66,3 +66,11 @@ Enter copies the translation and hides the window. Esc hides it and leaves the c
     timeout_ms = 2500
 
 The public server may require an API key. Point `online_url` at any LibreTranslate-compatible server. A DeepL address (`https://api-free.deepl.com` or `https://api.deepl.com`, including a full `/v2/translate` path) uses the DeepL API with the same key field.
+
+## Local API
+
+`dydict-local` is a separate package. It is not installed with DyDict. It connects a LibreTranslate-compatible server on this machine and does not install translation models.
+
+    pip install ./dydict-local
+
+DyDict tries `online_url` first. When that fails, and only when this package is installed, it tries the local server. `DYDICT_LOCAL_URL` defaults to `http://127.0.0.1:5000`. `DYDICT_LOCAL_API_KEY` is optional. `DYDICT_LOCAL_TIMEOUT_MS` defaults to 2500.

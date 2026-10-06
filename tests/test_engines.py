@@ -2,18 +2,13 @@ import json
 
 import pytest
 
-from dydict.config import LANGUAGES
 from dydict.engines import (
-    DownloadError,
     EngineFailure,
     EngineSuccess,
     OnlineError,
-    PackageMissing,
     build_translate_body,
-    directions_to_install,
-    argos_install,
-    install_directions,
     is_current,
+    load_local_engine,
     online_translate,
     parse_deepl_response,
     parse_online_response,
@@ -35,39 +30,27 @@ class Online:
         return self.text or ""
 
 
-class Offline(Online):
-    pass
-
-
-def test_online_success_does_not_call_offline():
-    offline = Offline("nope")
-    result = translate_with_fallback("hi", "en", "tr", Online("merhaba"), offline)
+def test_online_success_does_not_call_the_local_engine():
+    local = Online("nope")
+    result = translate_with_fallback("hi", "en", "tr", Online("merhaba"), local)
     assert result == EngineSuccess("merhaba", "online")
-    assert offline.calls == []
+    assert local.calls == []
 
 
-def test_concrete_online_failure_calls_offline():
-    result = translate_with_fallback(
-        "hi", "en", "tr", Online(error=OnlineError("down")), Offline("merhaba")
-    )
-    assert result == EngineSuccess("merhaba", "offline")
-
-
-def test_auto_online_failure_skips_offline():
-    offline = Offline("merhaba")
-    result = translate_with_fallback(
-        "hi", "auto", "tr", Online(error=OnlineError("down")), offline
-    )
+def test_online_failure_without_a_local_engine_is_the_online_error():
+    result = translate_with_fallback("hi", "en", "tr", Online(error=OnlineError("down")))
     assert result == EngineFailure("down", None, None)
-    assert offline.calls == []
 
 
-def test_missing_package_offers_that_pair():
-    offline = Offline(error=PackageMissing("de", "tr"))
+def test_installed_local_engine_runs_after_online_failure():
     result = translate_with_fallback(
-        "hallo", "de", "tr", Online(error=OnlineError("down")), offline
+        "hi", "en", "tr", Online(error=OnlineError("down")), Online("yerel")
     )
-    assert result == EngineFailure("down", "de", "tr")
+    assert result == EngineSuccess("yerel", "local")
+
+
+def test_default_install_has_no_local_engine():
+    assert load_local_engine() is None
 
 
 def test_stale_generation_is_not_current():
@@ -113,8 +96,8 @@ def test_non_string_translation_falls_back():
                 "https://example.com", text, source, target, "", 2500, post
             )
 
-    result = translate_with_fallback("hello", "en", "tr", HttpOnline(), Offline("yerel"))
-    assert result == EngineSuccess("yerel", "offline")
+    result = translate_with_fallback("hello", "en", "tr", HttpOnline())
+    assert result == EngineFailure("bad response", None, None)
 
 
 def test_online_translate_posts_json_with_timeout_seconds():
@@ -235,91 +218,3 @@ def test_repeated_scheme_on_libretranslate_uses_the_real_host():
     assert text == "merhaba"
     assert seen["url"] == "https://libretranslate.com/translate"
     assert seen["body"]["q"] == "hello"
-
-
-def test_german_download_is_both_directions_of_that_pair():
-    assert directions_to_install("de", "tr", set(LANGUAGES)) == [("de", "tr"), ("tr", "de")]
-    assert directions_to_install("auto", "tr", set(LANGUAGES)) == []
-
-    class Package:
-        def __init__(self, source, target):
-            self.from_code = source
-            self.to_code = target
-
-    downloaded = []
-    packages = [Package("de", "tr"), Package("tr", "de"), Package("en", "tr")]
-    install_directions(
-        "de",
-        "tr",
-        set(LANGUAGES),
-        packages,
-        download=lambda pkg: downloaded.append((pkg.from_code, pkg.to_code)) or "path",
-        install=lambda path: None,
-    )
-    assert downloaded == [("de", "tr"), ("tr", "de")]
-
-
-def test_download_failure_is_not_retried():
-    class Package:
-        from_code = "de"
-        to_code = "tr"
-
-    calls = []
-
-    def download(pkg):
-        calls.append(pkg)
-        raise RuntimeError("disk full")
-
-    with pytest.raises(DownloadError, match="disk full"):
-        install_directions(
-            "de", "tr", set(LANGUAGES), [Package()], download, lambda path: None
-        )
-    assert len(calls) == 1
-
-
-def test_missing_index_after_refresh_is_download_error(monkeypatch, tmp_path):
-    import socket
-
-    index = tmp_path / "missing" / "index.json"
-    seen = {}
-    listed = []
-
-    def update_package_index():
-        seen["timeout"] = socket.getdefaulttimeout()
-
-    def get_available_packages():
-        listed.append("called")
-        raise AssertionError("must not list packages")
-
-    monkeypatch.setattr("argostranslate.package.update_package_index", update_package_index)
-    monkeypatch.setattr("argostranslate.package.get_available_packages", get_available_packages)
-    monkeypatch.setattr("argostranslate.settings.local_package_index", index)
-    previous = socket.getdefaulttimeout()
-    socket.setdefaulttimeout(4.5)
-    try:
-        with pytest.raises(DownloadError):
-            argos_install("de", "tr")
-        assert seen["timeout"] == 15
-        assert listed == []
-        assert socket.getdefaulttimeout() == 4.5
-    finally:
-        socket.setdefaulttimeout(previous)
-
-
-def test_index_update_failure_is_download_error(monkeypatch):
-    installed = []
-
-    def update_package_index():
-        raise RuntimeError("index down")
-
-    def install_from_path(path):
-        installed.append(path)
-
-    monkeypatch.setattr(
-        "argostranslate.package.update_package_index", update_package_index
-    )
-    monkeypatch.setattr("argostranslate.package.install_from_path", install_from_path)
-
-    with pytest.raises(DownloadError, match="index down"):
-        argos_install("de", "tr")
-    assert installed == []

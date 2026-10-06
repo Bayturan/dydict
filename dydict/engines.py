@@ -1,4 +1,8 @@
-"""Online LibreTranslate or DeepL, and offline Argos Translate."""
+"""Online LibreTranslate or DeepL.
+
+A local API is not part of this install. The optional ``dydict-local``
+package registers one through the ``dydict.engines`` entry point.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +11,7 @@ import re
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
-from dydict.config import LANGUAGES, valid_online_url
+from dydict.config import valid_online_url
 
 # A pasted server field often repeats the scheme or includes /v2/translate.
 _REPEATED_SCHEME = re.compile(r"^(?:https?://)+", re.IGNORECASE)
@@ -19,17 +23,6 @@ _DEEPL_TARGETS = {"en": "EN-US", "pt": "PT-BR", "zh": "ZH-HANS"}
 class OnlineError(Exception):
     def __init__(self, message: str = "online failed") -> None:
         super().__init__(message)
-
-
-class PackageMissing(Exception):
-    def __init__(self, source: str, target: str) -> None:
-        super().__init__(f"{source} → {target}")
-        self.source = source
-        self.target = target
-
-
-class DownloadError(Exception):
-    pass
 
 
 @dataclass(frozen=True)
@@ -158,45 +151,29 @@ def online_translate(
     return finish(status, payload)
 
 
-def translate_with_fallback(text: str, source: str, target: str, online, offline):
+def translate_with_fallback(text: str, source: str, target: str, online, offline=None):
+    """Translate online. ``offline`` is the optional local API, never Argos."""
     try:
         translated = online.translate(text, source, target)
         return EngineSuccess(translated, "online")
     except OnlineError as exc:
-        message = str(exc)
-        if source == "auto":
-            return EngineFailure(message, None, None)
+        if offline is None:
+            return EngineFailure(str(exc), None, None)
         try:
             translated = offline.translate(text, source, target)
-        except PackageMissing:
-            return EngineFailure(message, source, target)
-        except OnlineError as offline_exc:
-            return EngineFailure(str(offline_exc), None, None)
-        return EngineSuccess(translated, "offline")
+        except OnlineError as local_exc:
+            return EngineFailure(str(local_exc), None, None)
+        return EngineSuccess(translated, "local")
 
 
-def directions_to_install(source: str, target: str, allowed: set[str]) -> list[tuple[str, str]]:
-    if source == "auto" or source not in allowed or target not in allowed or source == target:
-        return []
-    return [(source, target), (target, source)]
+def load_local_engine():
+    """Load the ``dydict-local`` engine when that package is installed."""
+    from importlib.metadata import entry_points
 
-
-def install_directions(source: str, target: str, allowed: set[str], packages, download, install) -> None:
-    pairs = directions_to_install(source, target, allowed)
-    if not pairs:
-        raise DownloadError("no package")
-    by_pair = {(pkg.from_code, pkg.to_code): pkg for pkg in packages}
-    for pair in pairs:
-        pkg = by_pair.get(pair)
-        if pkg is None:
-            raise DownloadError(f"no package for {pair[0]} → {pair[1]}")
-        try:
-            path = download(pkg)
-            install(path)
-        except DownloadError:
-            raise
-        except Exception as exc:
-            raise DownloadError(str(exc)) from exc
+    matches = [item for item in entry_points(group="dydict.engines") if item.name == "local"]
+    if not matches:
+        return None
+    return matches[0].load()()
 
 
 def urllib_post(url: str, data: bytes, headers: dict[str, str], timeout: float) -> tuple[int, bytes]:
@@ -211,49 +188,3 @@ def urllib_post(url: str, data: bytes, headers: dict[str, str], timeout: float) 
         raise OnlineError(f"HTTP {exc.code}") from exc
     except urllib.error.URLError as exc:
         raise OnlineError(str(exc.reason)) from exc
-
-
-def argos_offline_translate(text: str, source: str, target: str) -> str:
-    import argostranslate.translate
-
-    languages = argostranslate.translate.get_installed_languages()
-    from_lang = next((item for item in languages if item.code == source), None)
-    to_lang = next((item for item in languages if item.code == target), None)
-    if from_lang is None or to_lang is None:
-        raise PackageMissing(source, target)
-    translation = from_lang.get_translation(to_lang)
-    if translation is None:
-        raise PackageMissing(source, target)
-    return translation.translate(text)
-
-
-def argos_install(source: str, target: str) -> None:
-    import socket
-    from pathlib import Path
-
-    import argostranslate.package
-    import argostranslate.settings
-
-    previous = socket.getdefaulttimeout()
-    socket.setdefaulttimeout(15)
-    try:
-        try:
-            argostranslate.package.update_package_index()
-            index = argostranslate.settings.local_package_index
-            if not Path(index).is_file():
-                raise DownloadError("package index unavailable")
-            available = argostranslate.package.get_available_packages()
-        except DownloadError:
-            raise
-        except Exception as exc:
-            raise DownloadError(str(exc)) from exc
-    finally:
-        socket.setdefaulttimeout(previous)
-    install_directions(
-        source,
-        target,
-        set(LANGUAGES),
-        available,
-        download=lambda pkg: pkg.download(),
-        install=lambda path: argostranslate.package.install_from_path(path),
-    )

@@ -1,7 +1,8 @@
-"""Popup state. GTK construction lives in build_popup and is added in Task 7."""
+"""Popup state, launcher styling, and the show-then-translate startup path."""
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 
 from dydict.config import Config
@@ -42,6 +43,7 @@ class PopupController:
     def __init__(self, config: Config, detect, online, offline, names: dict[str, str]) -> None:
         self._config = config
         self._detect = detect
+        self._detector_factory = None
         self._online = online
         self._offline = offline
         self._names = names
@@ -51,6 +53,22 @@ class PopupController:
         self._result: QueryResult | None = None
         self._visible = False
         self.notice = ""
+
+    @property
+    def detector_factory(self):
+        return self._detector_factory
+
+    def set_detector_factory(self, factory) -> None:
+        if factory is not None:
+            self._detector_factory = factory
+
+    def _resolve_detect(self):
+        if self._detect is None:
+            factory = self._detector_factory
+            if factory is None:
+                raise RuntimeError("language detector is not available")
+            self._detect = factory()
+        return self._detect
 
     @property
     def result(self) -> QueryResult | None:
@@ -146,7 +164,7 @@ class PopupController:
                 None, 0.0, self._config.main_language, self._config.second_language, len(prepared)
             )
         else:
-            detected, confidence = run_detector(prepared, self._detect)
+            detected, confidence = run_detector(prepared, self._resolve_detect())
             direction = choose_direction(
                 detected,
                 confidence,
@@ -158,11 +176,6 @@ class PopupController:
         outcome = self._online_or_offline(prepared, direction.source, direction.target)
         if isinstance(outcome, EngineSuccess):
             result = QueryResult("ok", outcome.text, outcome.engine, line, "", None, None)
-        elif outcome.package_source:
-            result = QueryResult(
-                "need_package", "", None, line, outcome.message,
-                outcome.package_source, outcome.package_target,
-            )
         else:
             result = QueryResult("error", "", None, line, outcome.message, None, None)
         return result, direction
@@ -178,14 +191,146 @@ WINDOW_WIDTH = 640
 QUERY_MAX_HEIGHT = 52
 RESULT_MAX_HEIGHT = 300
 WINDOW_MAX_HEIGHT = 480
-# The settings form sits under the translation. 480px clips Save, and this
-# scrolled window compresses its child instead of scrolling, so open settings
-# raise the cap enough for the form to stay on screen.
+# The settings form sits under the translation. 480px clips Save, so open
+# settings raise the cap. Content that is still taller scrolls.
 SETTINGS_WINDOW_MAX = 720
 
 
 def window_content_limit(settings_open: bool) -> int:
     return SETTINGS_WINDOW_MAX if settings_open else WINDOW_MAX_HEIGHT
+
+
+# Two lines of the 16px query face fit in this cap; a third line scrolls.
+QUERY_VISIBLE_LINES = 2
+
+CLASS_POPUP = "dydict-popup"
+CLASS_CARD = "launcher-card"
+CLASS_SHELL = "launcher-shell"
+CLASS_QUERY = "launcher-query"
+CLASS_META = "launcher-meta"
+CLASS_RESULT = "launcher-result"
+
+LAUNCHER_STYLESHEET = """
+window.dydict-popup {
+  background-color: transparent;
+  border-radius: 16px;
+}
+
+.launcher-shell,
+.launcher-shell > viewport {
+  background-color: transparent;
+}
+
+.launcher-card {
+  background-color: @window_bg_color;
+  color: @window_fg_color;
+  border-radius: 16px;
+  padding: 14px;
+  border: 1px solid alpha(@window_fg_color, 0.12);
+}
+
+.launcher-query {
+  font-size: 16px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background-color: @theme_base_color;
+  border: 1px solid alpha(@window_fg_color, 0.14);
+}
+
+.launcher-query text {
+  background-color: transparent;
+  font-size: 16px;
+}
+
+.launcher-meta {
+  opacity: 0.62;
+  font-size: 12px;
+}
+
+.launcher-result {
+  border-radius: 12px;
+  background-color: alpha(@window_fg_color, 0.07);
+}
+
+.launcher-result > viewport {
+  background-color: transparent;
+  border-radius: 12px;
+}
+
+.launcher-result label {
+  padding: 8px 12px;
+}
+
+.launcher-card button {
+  border-radius: 8px;
+  padding: 4px 10px;
+}
+"""
+
+
+def launcher_stylesheet() -> str:
+    return LAUNCHER_STYLESHEET
+
+
+def load_launcher_css(provider) -> None:
+    """Load the same stylesheet text the popup applies."""
+    css = launcher_stylesheet()
+    loader = getattr(provider, "load_from_string", None)
+    if loader is not None:
+        loader(css)
+        return
+    provider.load_from_data(css.encode())
+
+
+def launcher_layout() -> dict:
+    """Sizes the popup actually applies. Height follows content inside the caps."""
+    return {
+        "width": WINDOW_WIDTH,
+        "query_lines": QUERY_VISIBLE_LINES,
+        "query_max_height": QUERY_MAX_HEIGHT,
+        "result_scrolls": True,
+        "result_max_height": RESULT_MAX_HEIGHT,
+        "window_max_height": window_content_limit(False),
+        "settings_window_max": window_content_limit(True),
+    }
+
+
+def present_query(surface, raw: str, controller: PopupController, detector_factory, begin_translate) -> int:
+    """Put the selection in the field, show the window, focus it, then translate.
+
+    The detector factory is not called here. Translation runs immediately for
+    this generation, with no edit debounce, and builds the detector only after
+    the window is already visible.
+    """
+    prepared, _shortened = prepare_query(raw)
+    generation = controller.open_with()
+    surface.apply_selection(prepared)
+    surface.present_window()
+    surface.focus_query()
+    controller.set_detector_factory(detector_factory)
+    begin_translate(prepared, generation)
+    return generation
+
+
+def run_detached(work) -> threading.Thread:
+    thread = threading.Thread(target=work, daemon=True)
+    thread.start()
+    return thread
+
+
+def translate_off_ui(controller, text: str, generation: int, on_result, on_error) -> threading.Thread:
+    """Run translate_now off the calling thread. A stale generation returns None and is not delivered."""
+
+    def work() -> None:
+        try:
+            result = controller.translate_now(text, generation)
+        except Exception as exc:
+            on_error(str(exc), generation)
+            return
+        if result is not None:
+            on_result(result, generation)
+
+    return run_detached(work)
 
 
 class OnlineEngine:
@@ -207,18 +352,12 @@ class OnlineEngine:
         )
 
 
-class OfflineEngine:
-    def translate(self, text: str, source: str, target: str) -> str:
-        from dydict.engines import argos_offline_translate
-
-        return argos_offline_translate(text, source, target)
-
-
 class Popup:
     def __init__(self, controller: PopupController, on_save_config) -> None:
         import gi
 
         gi.require_version("Gtk", "4.0")
+        gi.require_version("Gdk", "4.0")
         from gi.repository import Gdk, GLib, Gtk
 
         self._GLib = GLib
@@ -229,38 +368,45 @@ class Popup:
         self._debounce_id = None
         self._accept_leave = False
         self._shown_generation = None
+        self._fit_source = None
 
+        layout = launcher_layout()
         self.window = Gtk.Window(title="DyDict")
-        self.window.set_default_size(WINDOW_WIDTH, -1)
+        self.window.add_css_class(CLASS_POPUP)
+        self.window.set_default_size(layout["width"], -1)
+        self.window.set_size_request(layout["width"], -1)
         self.window.set_resizable(False)
+        self._install_style()
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        root.set_margin_top(12)
-        root.set_margin_bottom(12)
-        root.set_margin_start(12)
-        root.set_margin_end(12)
+        root.add_css_class(CLASS_CARD)
 
         self.buffer = Gtk.TextBuffer()
         self.view = Gtk.TextView(buffer=self.buffer, wrap_mode=Gtk.WrapMode.WORD_CHAR)
-        self.view.set_size_request(WINDOW_WIDTH - 24, QUERY_MAX_HEIGHT)
+        self.view.add_css_class(CLASS_QUERY)
+        self.view.set_hexpand(True)
         query_scroll = Gtk.ScrolledWindow()
         query_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         query_scroll.set_propagate_natural_height(True)
-        query_scroll.set_max_content_height(QUERY_MAX_HEIGHT)
+        query_scroll.set_max_content_height(layout["query_max_height"])
         query_scroll.set_child(self.view)
-        self.direction = Gtk.Label(label="", xalign=0)
+        self._query_scroll = query_scroll
+        self.direction = Gtk.Label(label="", xalign=0, hexpand=True)
         self.engine = Gtk.Label(label="", xalign=1)
+        self.direction.add_css_class(CLASS_META)
+        self.engine.add_css_class(CLASS_META)
         head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         head.append(self.direction)
         head.append(self.engine)
         self.message = Gtk.Label(label="", xalign=0, wrap=True)
         self.result = Gtk.Label(label="", xalign=0, wrap=True, selectable=True)
         scroller = Gtk.ScrolledWindow()
-        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroller.add_css_class(CLASS_RESULT)
+        result_policy = Gtk.PolicyType.AUTOMATIC if layout["result_scrolls"] else Gtk.PolicyType.NEVER
+        scroller.set_policy(Gtk.PolicyType.NEVER, result_policy)
         scroller.set_propagate_natural_height(True)
-        scroller.set_max_content_height(RESULT_MAX_HEIGHT)
+        scroller.set_max_content_height(layout["result_max_height"])
         scroller.set_child(self.result)
-        self.download = Gtk.Button(label="Download languages")
-        self.download.set_visible(False)
+        self._result_scroll = scroller
         self.copy_button = Gtk.Button(label="Copy")
         self.settings_button = Gtk.Button(label="Settings")
         from dydict.settings_view import build_settings
@@ -271,7 +417,6 @@ class Popup:
         self.swap_button = Gtk.Button(label="Swap")
         actions.append(self.swap_button)
         actions.append(self.copy_button)
-        actions.append(self.download)
         actions.append(self.settings_button)
 
         root.append(query_scroll)
@@ -281,10 +426,11 @@ class Popup:
         root.append(actions)
         root.append(self.settings)
         outer = Gtk.ScrolledWindow()
+        outer.add_css_class(CLASS_SHELL)
         outer.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         outer.set_overlay_scrolling(False)
         outer.set_propagate_natural_height(True)
-        outer.set_max_content_height(WINDOW_MAX_HEIGHT)
+        outer.set_max_content_height(layout["window_max_height"])
         outer.set_child(root)
         self.window.set_child(outer)
         self._outer = outer
@@ -296,7 +442,6 @@ class Popup:
         self.buffer.connect("changed", self._on_changed)
         self.swap_button.connect("clicked", lambda _b: self._swap_clicked())
         self.copy_button.connect("clicked", lambda _b: self._copy_clicked())
-        self.download.connect("clicked", lambda _b: self._download_clicked())
         self.settings_button.connect("clicked", lambda _b: self._toggle_settings())
         focus = Gtk.EventControllerFocus()
         focus.connect("leave", self._on_leave)
@@ -304,22 +449,119 @@ class Popup:
         self.window.connect("close-request", self._on_close)
         self._Gdk = Gdk
 
+    def _install_style(self) -> None:
+        provider = self._Gtk.CssProvider()
+        load_launcher_css(provider)
+        from gi.repository import Gdk
+
+        display = Gdk.Display.get_default()
+        if display is None:
+            return
+        self._Gtk.StyleContext.add_provider_for_display(
+            display,
+            provider,
+            self._Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+        )
+
+    def _schedule_fit(self) -> None:
+        if self._fit_source is not None:
+            return
+        self._fit_source = self._GLib.idle_add(self._fit_to_content)
+
+    def _fit_to_content(self) -> bool:
+        """Grow or shrink the card with its content, inside the active cap.
+
+        ``set_default_size`` only records the size a compositor may apply later.
+        A mapped window keeps its old allocation until then, so closing settings
+        left the card above the 480px cap and a tall result never reached the
+        settings cap. Allocate the target immediately, and ask the toplevel to
+        match it without flipping ``resizable`` (a tiling compositor would
+        swallow a resizable window). The card's minimum height is its content,
+        which lets the outer scroller reach Save when that content is taller
+        than the cap. The scroller's own minimum stays small, so the cap holds.
+        """
+        self._fit_source = None
+        if not self.window.get_visible():
+            return False
+        layout = launcher_layout()
+        width = layout["width"]
+        card = self._outer.get_child()
+        if card is None:
+            return False
+        # A height pinned by the previous fit would report that old height.
+        _pinned_width, pinned_height = card.get_size_request()
+        card.set_size_request(-1, -1)
+        _minimum, natural, _baseline, _natural_baseline = card.measure(
+            self._Gtk.Orientation.VERTICAL, width
+        )
+        natural = int(natural)
+        if natural <= 0:
+            return False
+        cap = int(self._outer.get_max_content_height())
+        height = min(natural, cap) if cap > 0 else natural
+        if height <= 0:
+            return False
+        if (
+            self.window.get_width() == width
+            and self.window.get_height() == height
+            and pinned_height == natural
+        ):
+            card.set_size_request(-1, natural)
+            return False
+        card.set_size_request(-1, natural)
+        focused = self.window.get_focus()
+        self.window.set_resizable(False)
+        self.window.set_default_size(width, height)
+        surface = self.window.get_surface()
+        if surface is not None:
+            toplevel = self._Gdk.ToplevelLayout.new()
+            toplevel.set_resizable(False)
+            surface.present(toplevel)
+        rect = self._Gdk.Rectangle()
+        rect.x = 0
+        rect.y = 0
+        rect.width = width
+        rect.height = height
+        self.window.size_allocate(rect, -1)
+        if focused is not None:
+            focused.grab_focus()
+        return False
+
     def _toggle_settings(self) -> None:
         show = not self.settings.get_visible()
         self.settings.set_visible(show)
         self._outer.set_max_content_height(window_content_limit(show))
+        self._schedule_fit()
+
+    def apply_selection(self, text: str) -> None:
+        self._clear_query_view()
+        self._set_text(text)
+
+    def present_window(self) -> None:
+        self.window.set_visible(True)
+        self._schedule_fit()
+        self._GLib.idle_add(self._arm_leave)
+
+    def focus_query(self) -> None:
+        self.view.grab_focus()
 
     def show_text(self, raw: str) -> None:
-        from dydict.selection import prepare_query
+        present_query(
+            self,
+            raw,
+            self.controller,
+            self.controller.detector_factory,
+            self.start_translation,
+        )
 
-        prepared, _shortened = prepare_query(raw)
-        generation = self.controller.open_with()
-        self._clear_query_view()
-        self.window.set_visible(True)
-        self._set_text(prepared)
-        self.view.grab_focus()
-        self._GLib.idle_add(self._arm_leave)
-        self._start(prepared, generation)
+    def start_translation(self, text: str, generation: int) -> None:
+        translate_off_ui(
+            self.controller,
+            text,
+            generation,
+            lambda result, gen: self._GLib.idle_add(self._apply, result, gen),
+            lambda message, gen: self._GLib.idle_add(self._worker_failed, message, gen),
+        )
 
     def _clear_query_view(self) -> None:
         self._shown_generation = None
@@ -327,7 +569,6 @@ class Popup:
         self.engine.set_text("")
         self.result.set_text("")
         self.message.set_text("")
-        self.download.set_visible(False)
         self.swap_button.set_sensitive(False)
 
     def _focus_in_settings(self) -> bool:
@@ -398,23 +639,13 @@ class Popup:
         return False
 
     def _start(self, text: str, generation: int) -> None:
-        import threading
-
-        def work():
-            try:
-                result = self.controller.translate_now(text, generation)
-            except Exception as exc:
-                self._GLib.idle_add(self._worker_failed, str(exc), generation)
-                return
-            if result is not None:
-                self._GLib.idle_add(self._apply, result, generation)
-
-        threading.Thread(target=work, daemon=True).start()
+        self.start_translation(text, generation)
 
     def _worker_failed(self, message: str, generation: int) -> bool:
         if generation != self.controller.generation:
             return False
         self.message.set_text(message)
+        self._schedule_fit()
         return False
 
     def _apply(self, result, generation=None) -> bool:
@@ -425,16 +656,10 @@ class Popup:
         self.result.set_text(result.translation)
         notice = self.controller.notice or result.message
         self.message.set_text(notice)
-        self.download.set_visible(result.kind == "need_package")
-        if result.kind == "need_package":
-            from dydict.detect import language_name
-
-            left = language_name(result.package_source, self.controller._names)
-            right = language_name(result.package_target, self.controller._names)
-            self.download.set_label(f"Download {left} and {right}")
         direction = self.controller.direction
         self.swap_button.set_sensitive(direction is not None and direction.source != "auto")
         self._shown_generation = self.controller.generation
+        self._schedule_fit()
         return False
 
     def _current_text(self) -> str:
@@ -476,37 +701,6 @@ class Popup:
         if keyval == self._Gdk.KEY_s and state & self._Gdk.ModifierType.CONTROL_MASK:
             self._swap_clicked()
             return True
-        return False
-
-    def _download_clicked(self) -> None:
-        result = self.controller.result
-        if result is None or result.kind != "need_package":
-            return
-        self.download.set_sensitive(False)
-
-        def work():
-            from dydict.engines import DownloadError, argos_install
-
-            try:
-                argos_install(result.package_source, result.package_target)
-            except DownloadError as exc:
-                self._GLib.idle_add(self._download_finished, str(exc))
-                return
-            self._GLib.idle_add(self._download_finished, "")
-
-        import threading
-
-        threading.Thread(target=work, daemon=True).start()
-
-    def _download_finished(self, error: str) -> bool:
-        self.download.set_sensitive(True)
-        if error:
-            self.message.set_text(error)
-            return False
-        text = self._current_text()
-        generation = self.controller.retry()
-        self._clear_query_view()
-        self._start(text, generation)
         return False
 
     def _save_config(self, config) -> None:
